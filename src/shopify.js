@@ -2,6 +2,9 @@
 // (Dev Dashboard app in the same Shopify organization as the store).
 // Tokens last 24 hours and are refreshed automatically.
 import { config } from "./config.js";
+import { getShopToken, saveShopToken } from "./db.js";
+
+export const SCOPES = "read_products,write_products,read_inventory,write_inventory,read_locations,read_orders,read_reports";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -21,6 +24,37 @@ export class Shopify {
 
   async getToken() {
     if (this.token && Date.now() < this.expiresAt - 5 * 60_000) return this.token;
+    // 1) Token from installing the app on the store (Settings → "Connect store" in Stock Desk).
+    const saved = await getShopToken(this.store.id).catch(() => null);
+    if (saved) {
+      const exp = saved.expires_at ? new Date(saved.expires_at).getTime() : Infinity;
+      if (Date.now() < exp - 5 * 60_000) {
+        this.token = saved.access_token;
+        this.expiresAt = exp;
+        return this.token;
+      }
+      if (saved.refresh_token) {
+        const res = await fetch(`${this.base}/oauth/access_token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+          body: new URLSearchParams({
+            client_id: this.store.clientId,
+            client_secret: this.store.clientSecret,
+            grant_type: "refresh_token",
+            refresh_token: saved.refresh_token,
+          }),
+        });
+        if (res.ok) {
+          const t = await res.json();
+          await saveShopToken(this.store.id, this.store.shop, t);
+          this.token = t.access_token;
+          this.expiresAt = t.expires_in ? Date.now() + Number(t.expires_in) * 1000 : Infinity;
+          return this.token;
+        }
+        throw new Error(`Shopify connection for ${this.store.shop} has expired (${res.status}). Open Stock Desk → Settings and press "Connect ${this.store.id}" again.`);
+      }
+    }
+    // 2) Client credentials grant (works when the app and store share a Shopify organization).
     const res = await fetch(`${this.base}/oauth/access_token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -32,7 +66,7 @@ export class Shopify {
     });
     if (!res.ok) {
       const text = (await res.text()).slice(0, 300);
-      throw new Error(`Shopify sign-in failed for ${this.store.shop} (${res.status}): ${text}`);
+      throw new Error(`Shopify sign-in failed for ${this.store.shop} (${res.status}): ${text}. Open Stock Desk and use "Connect ${this.store.id}" to install the app on the store.`);
     }
     const j = await res.json();
     this.token = j.access_token;

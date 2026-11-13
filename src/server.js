@@ -4,8 +4,8 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { config, assertServerConfig } from "./config.js";
-import { migrate, getDoc, setDoc, deleteDoc, listCollection, version, lastRuns, httpError } from "./db.js";
-import { clientForDomain } from "./shopify.js";
+import { migrate, getDoc, setDoc, deleteDoc, listCollection, version, lastRuns, httpError, getShopToken, saveShopToken } from "./db.js";
+import { clientForDomain, clientFor, SCOPES } from "./shopify.js";
 import { syncAll, syncStore, syncStatus } from "./sync.js";
 import { alertConfigured } from "./alerts.js";
 
@@ -77,6 +77,47 @@ app.post("/logout", (req, res) => {
   res.redirect("/login");
 });
 
+/* ---------- Shopify app install (authorization code grant) ---------- */
+// Dev Dashboard app settings: App URL = <APP_URL>/connect, redirect URL = <APP_URL>/shopify/callback
+const baseUrl = (req) => (process.env.APP_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
+app.get("/shopify/install", (req, res) => {
+  if (!readSession(req)) return res.redirect("/login");
+  const s = config.stores.find((x) => x.id === req.query.store);
+  if (!s) return res.status(404).send("Unknown store. Check SMASH_* / VENERATE_* settings in Render.");
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const state = `${s.id}.${nonce}.${sign(s.id + "." + nonce)}`;
+  const url = `https://${s.shop}.myshopify.com/admin/oauth/authorize?` +
+    new URLSearchParams({ client_id: s.clientId, scope: SCOPES, redirect_uri: `${baseUrl(req)}/shopify/callback`, state });
+  res.setHeader("Set-Cookie", `sd_oauth=${nonce}; Path=/shopify; HttpOnly; Secure; SameSite=Lax; Max-Age=600`);
+  res.redirect(url);
+});
+app.get("/shopify/callback", async (req, res) => {
+  try {
+    const q = req.query;
+    const [storeId, nonce, sig] = String(q.state || "").split(".");
+    const s = config.stores.find((x) => x.id === storeId);
+    const cookieNonce = ((req.headers.cookie || "").match(/(?:^|;\s*)sd_oauth=([^;]+)/) || [])[1];
+    if (!s || !nonce || nonce !== cookieNonce || sig !== sign(storeId + "." + nonce)) return res.status(403).send("This sign-in link expired. Go back to Stock Desk and press Connect again.");
+    if (String(q.shop).toLowerCase() !== `${s.shop}.myshopify.com`.toLowerCase()) return res.status(400).send(`Shopify returned ${q.shop}, but this app is set up for ${s.shop}.myshopify.com.`);
+    const msg = Object.entries(q).filter(([k]) => k !== "hmac" && k !== "signature").sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join("&");
+    const digest = crypto.createHmac("sha256", s.clientSecret).update(msg).digest("hex");
+    if (digest.length !== String(q.hmac || "").length || !crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(String(q.hmac)))) return res.status(403).send("Shopify's signature didn't match.");
+    const r = await fetch(`https://${s.shop}.myshopify.com/admin/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: new URLSearchParams({ client_id: s.clientId, client_secret: s.clientSecret, code: String(q.code), expiring: "1" }),
+    });
+    if (!r.ok) return res.status(502).send(`Shopify didn't issue a token (${r.status}).`);
+    const t = await r.json();
+    await saveShopToken(s.id, s.shop, t);
+    res.setHeader("Set-Cookie", `sd_oauth=; Path=/shopify; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+    res.redirect(`/connect?ok=${encodeURIComponent(s.id)}`);
+  } catch (e) {
+    console.error(e);
+    res.status(500).send("Connecting the store failed: " + e.message);
+  }
+});
+
 app.use((req, res, next) => {
   const user = readSession(req) || (apiKeyOk(req) ? "api" : null);
   if (user) {
@@ -87,6 +128,26 @@ app.use((req, res, next) => {
   res.redirect("/login");
 });
 
+/* ---------- store connections ---------- */
+app.get("/connect", wrap(async (req, res) => {
+  const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const rows = [];
+  for (const s of config.stores) {
+    const t = await getShopToken(s.id).catch(() => null);
+    let status = t ? `Connected (installed ${new Date(t.updated_at).toLocaleDateString("en-US")})` : "Not connected yet";
+    let name = "";
+    try { name = (await clientFor(s.id).shopInfo()).name; status += " · Shopify answered: " + name; } catch (e) { if (t) status += " · Error: " + e.message; }
+    rows.push(`<tr><td><b>${esc(s.id)}</b><br><span>${esc(s.shop)}.myshopify.com</span></td><td>${esc(status)}</td><td><a class="btn" href="/shopify/install?store=${esc(s.id)}">${t ? "Reconnect" : "Connect"}</a></td></tr>`);
+  }
+  const ok = req.query.ok ? `<p class="ok">${esc(req.query.ok)} is connected. The next sync will use it.</p>` : "";
+  res.send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Stock Desk · Stores</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;background:#F4F5F8;color:#1B1D26;margin:0;padding:24px 16px}main{max-width:760px;margin:0 auto;background:#fff;border:1px solid #DCE0E8;border-radius:12px;padding:20px}
+table{width:100%;border-collapse:collapse}td{padding:10px 8px;border-bottom:1px solid #DCE0E8;vertical-align:top}td span{color:#5C6273;font-size:.85rem}.btn{display:inline-block;background:#86275F;color:#fff;padding:7px 14px;border-radius:8px;text-decoration:none}.ok{background:#E3F3EA;color:#1D7A4C;padding:8px 12px;border-radius:8px}</style>
+<main><p><a href="/">← Stock Desk</a></p><h1>Shopify stores</h1>${ok}
+<p>Each store connects through its own Shopify app (Smash Stock Desk, Venerate Stock Desk). Press Connect and approve in Shopify.</p>
+<table>${rows.join("") || "<tr><td>No stores set up. Add SMASH_* / VENERATE_* settings in Render.</td></tr>"}</table></main>`);
+}));
+
 /* ---------- page ---------- */
 app.get("/", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
@@ -95,11 +156,13 @@ app.get("/", (req, res) => {
 app.use(express.static(publicDir, { index: false, maxAge: "5m" }));
 
 /* ---------- document store (what the page's db calls use) ---------- */
-const wrap = (fn) => (req, res) =>
-  Promise.resolve(fn(req, res)).catch((e) => {
-    if (!e.status) console.error(e);
-    res.status(e.status || 500).json({ error: e.status ? e.message : "Server error: " + e.message });
-  });
+function wrap(fn) {
+  return (req, res) =>
+    Promise.resolve(fn(req, res)).catch((e) => {
+      if (!e.status) console.error(e);
+      res.status(e.status || 500).json({ error: e.status ? e.message : "Server error: " + e.message });
+    });
+}
 
 app.get("/api/version", wrap(async (req, res) => res.json({ version: await version() })));
 app.get("/api/doc", wrap(async (req, res) => {

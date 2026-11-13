@@ -19,6 +19,16 @@ export async function migrate() {
     CREATE INDEX IF NOT EXISTS docs_parent ON docs(parent);
     CREATE TABLE IF NOT EXISTS meta (k text PRIMARY KEY, v jsonb NOT NULL);
     INSERT INTO meta(k, v) VALUES ('version', '0') ON CONFLICT DO NOTHING;
+    CREATE TABLE IF NOT EXISTS shop_tokens (
+      store              text PRIMARY KEY,
+      shop               text NOT NULL,
+      access_token       text NOT NULL,
+      refresh_token      text,
+      expires_at         timestamptz,
+      refresh_expires_at timestamptz,
+      scope              text,
+      updated_at         timestamptz NOT NULL DEFAULT now()
+    );
     CREATE TABLE IF NOT EXISTS sync_runs (
       id         serial PRIMARY KEY,
       store      text NOT NULL,
@@ -149,4 +159,23 @@ export async function lastRuns() {
     `SELECT DISTINCT ON (store) store, started_at, ended_at, ok, message FROM sync_runs ORDER BY store, started_at DESC`
   );
   return r.rows;
+}
+
+// Shopify OAuth tokens (kept out of the docs table so the page API can never read them).
+export async function getShopToken(store) {
+  const r = await pool.query(`SELECT * FROM shop_tokens WHERE store = $1`, [store]);
+  return r.rows[0] || null;
+}
+export async function saveShopToken(store, shop, t) {
+  const exp = t.expires_in ? new Date(Date.now() + Number(t.expires_in) * 1000) : null;
+  const rexp = t.refresh_token_expires_in ? new Date(Date.now() + Number(t.refresh_token_expires_in) * 1000) : null;
+  await pool.query(
+    `INSERT INTO shop_tokens(store, shop, access_token, refresh_token, expires_at, refresh_expires_at, scope, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,now())
+     ON CONFLICT (store) DO UPDATE SET shop=EXCLUDED.shop, access_token=EXCLUDED.access_token,
+       refresh_token=COALESCE(EXCLUDED.refresh_token, shop_tokens.refresh_token), expires_at=EXCLUDED.expires_at,
+       refresh_expires_at=COALESCE(EXCLUDED.refresh_expires_at, shop_tokens.refresh_expires_at),
+       scope=COALESCE(EXCLUDED.scope, shop_tokens.scope), updated_at=now()`,
+    [store, shop, t.access_token, t.refresh_token || null, exp, rexp, t.scope || null]
+  );
 }

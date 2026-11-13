@@ -38,7 +38,20 @@ Purchase orders, Markdowns, Dead stock, Data fixes, Settings).
 | `ALERT_EMAIL`, `ALERT_FROM`, `RESEND_API_KEY`, `APP_URL` | Optional negative-stock emails |
 
 Shopify app access scopes: `read_products, write_products, read_inventory, write_inventory, read_locations, read_orders, read_reports`.
-The apps must be in the same Shopify organization as the stores (client credentials grant).
+
+### Connecting the stores
+
+Each Dev Dashboard app ("Smash Stock Desk", "Venerate Stock Desk"):
+
+- **App URL:** `https://stockdesk-wpw0.onrender.com/connect`
+- **Allowed redirection URL:** `https://stockdesk-wpw0.onrender.com/shopify/callback`
+- **Embed app in Shopify admin:** off
+- Distribution: custom, for that one store.
+
+Then sign in to Stock Desk, open **Shopify stores** (`/connect`) and press **Connect** for
+each store. Stock Desk keeps the store's token (expiring offline token, refreshed
+automatically). If a store is in the same Shopify organization as its app, the client
+credentials grant is used instead and Connect isn't needed.
 
 ## Local checks
 

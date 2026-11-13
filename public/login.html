@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stock Desk · Sign in</title>
+<style>
+:root{--bg:#F4F5F8;--panel:#fff;--fg:#1B1D26;--muted:#5C6273;--line:#DCE0E8;--accent:#86275F;--bad:#B42318}
+@media (prefers-color-scheme:dark){:root{--bg:#111319;--panel:#191C24;--fg:#E7E9F0;--muted:#9BA2B3;--line:#2C313D;--accent:#DE86BC;--bad:#F27B6E}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:16px}
+form{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px;width:min(360px,100%);display:grid;gap:14px}
+h1{margin:0;font-size:1.5rem}label{display:grid;gap:4px;font-size:.85rem;color:var(--muted)}
+input{font:inherit;color:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+button{font:inherit;padding:10px;border:0;border-radius:8px;background:var(--accent);color:#fff;font-weight:600;cursor:pointer}
+.err{color:var(--bad);font-size:.88rem;margin:0}.eyebrow{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <div><div class="eyebrow">Smash &amp; Venerate</div><h1>Stock Desk</h1></div>
+  <p class="err" id="err" hidden></p>
+  <label>Name<input name="name" autocomplete="username" required autofocus></label>
+  <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+  <button type="submit">Sign in</button>
+</form>
+<script>
+const e=new URLSearchParams(location.search).get("e");
+if(e){const el=document.getElementById("err");el.hidden=false;el.textContent=e==="wait"?"Too many tries. Wait 15 minutes and try again.":"That name and password didn't match.";}
+</script>
+</body>
+</html>

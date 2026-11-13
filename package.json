@@ -1,0 +1,18 @@
+{
+  "name": "stockdesk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Stock Desk: inventory planning, purchase orders and receiving for Smash Beauty Supply and Venerate Beauty Supply.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "sync": "node src/cron.js",
+    "import": "node scripts/import.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}

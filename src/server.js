@@ -131,6 +131,11 @@ app.use((req, res, next) => {
 /* ---------- store connections ---------- */
 app.get("/connect", wrap(async (req, res) => {
   const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // Coming back from Shopify's install screen (App URL): finish connecting right away.
+  if (req.query.shop && !req.query.ok) {
+    const s = config.stores.find((x) => `${x.shop}.myshopify.com` === String(req.query.shop).toLowerCase());
+    if (s && !(await getShopToken(s.id).catch(() => null))) return res.redirect(`/shopify/install?store=${s.id}`);
+  }
   const rows = [];
   for (const s of config.stores) {
     const t = await getShopToken(s.id).catch(() => null);
